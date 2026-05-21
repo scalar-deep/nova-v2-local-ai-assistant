@@ -1,7 +1,6 @@
+import subprocess
 import time
 from pathlib import Path
-
-from picamera2 import Picamera2
 
 
 class SnapshotCamera:
@@ -13,31 +12,20 @@ class SnapshotCamera:
         filename = f"capture_{int(time.time())}.jpg"
         path = self.output_dir / filename
 
-        picam2 = None
+        cmd = [
+            "rpicam-still",
+            "-o", str(path),
+            "--width", "640",
+            "--height", "480",
+            "--timeout", "1000",
+            "--nopreview",
+        ]
 
         try:
-            picam2 = Picamera2()
-
-            config = picam2.create_preview_configuration(
-                main={"size": (640, 480)}
-            )
-
-            picam2.configure(config)
-            picam2.start()
-
-            time.sleep(1.0)
-
-            picam2.capture_file(str(path))
-
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
             print(f"[vision] captured {path}")
-
+            print("[vision] camera released")
             return str(path)
-
-        finally:
-            try:
-                if picam2:
-                    picam2.stop()
-                    picam2.close()
-                    print("[vision] camera released")
-            except Exception as e:
-                print(f"[vision] release error: {e}")
+        except Exception as e:
+            print(f"[vision error] {e}")
+            return None
