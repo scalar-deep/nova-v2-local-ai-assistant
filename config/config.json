@@ -1,0 +1,13 @@
+{
+  "project_root": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2",
+  "assets_path": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/assets/face",
+  "piper_voice": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/piper/voices/en_GB-semaine-medium.onnx",
+  "whisper_model": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/models/ggml-base.en.bin",
+  "whisper_binary": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/build/bin/whisper-cli",
+  "wake_word_model": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2_Nova_V2/models/wake_word/hey_jarvis_v0.1.onnx",
+  "local_soul_path": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/config/local_soul.md",
+  "cloud_soul_path": "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/config/cloud_soul.md",
+  "wake_word_threshold": 0.3,
+  "chat_model": "smollm2:135m",
+  "mic_sample_rate": 48000
+}

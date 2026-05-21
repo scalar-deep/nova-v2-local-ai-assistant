@@ -1,0 +1,27 @@
+{
+  "important_memories": [
+    {
+      "text": "Hijab is my name is Saruna.",
+      "saved_at": "2026-05-20 19:37:54"
+    },
+    {
+      "text": "My name is Arun. Remember that.",
+      "saved_at": "2026-05-20 19:38:26"
+    },
+    {
+      "text": "How are you?",
+      "saved_at": "2026-05-20 20:02:30"
+    }
+  ],
+  "facts": {
+    "favorite_color": {
+      "value": "blue",
+      "saved_at": "2026-05-20 19:33:55"
+    },
+    "name": {
+      "value": "arun",
+      "saved_at": "2026-05-20 19:40:15"
+    }
+  },
+  "last_updated": "2026-05-20 20:02:30"
+}

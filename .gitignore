@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Secrets
+.env
+*.env
+config/secrets.json
+
+# Runtime/debug files
+debug_last_stt.wav
+*.log
+logs/
+tmp/
+temp/
+
+# Camera captures
+vision/captures/
+captures/
+*.jpg
+*.jpeg
+
+# Audio debug/generated
+*.wav
+
+# Backups/checkpoints
+*backup*/
+*_backup*/
+*broken*/
+*.bak
+*.working
+*.bak_*
+*.tar.gz
+review_*/
+*_review*/
+
+# Generated/old asset packs
+*.zip
+nova_loquat_fruit_faces_v2/
+nova_robot_faces_pack/
+nova_v2_3d_robot_schema_faces/
+
+# Local downloaded engines/models
+piper/
+whisper.cpp/
+models/
+*.onnx
+*.tflite
+*.bin
+*.gguf
+*.pt
+*.pth
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
