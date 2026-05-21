@@ -1,0 +1,3 @@
+DEBUG STT WAV:
+-rw-rw-r-- 1 pi pi 193K May 21 21:03 evidence/audio/debug_last_stt.wav
+evidence/audio/debug_last_stt.wav: RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, mono 16000 Hz
