@@ -56,6 +56,11 @@ class UIManager:
         # Face assets (populated in render thread)
         self._faces: Dict[str, pygame.Surface] = {}
         self._face_rects: Dict[str, pygame.Rect] = {}
+
+        # Temporary image display, used for showing captured photos
+        self._temp_image_path: Optional[str] = None
+        self._temp_image_until: float = 0.0
+        self._temp_image_lock = Lock()
     
     def set_state(self, state: UIState):
         """Set the current UI state (thread-safe)."""
@@ -65,6 +70,13 @@ class UIManager:
     def set_audio_amplitude(self, amplitude: float):
         """Set audio amplitude for reactive animations (0.0 - 1.0)."""
         self._audio_amplitude = max(0.0, min(1.0, amplitude))
+
+    def show_image(self, image_path: str, duration: float = 3.0):
+        """Temporarily show an image on screen for a fixed duration."""
+        with self._temp_image_lock:
+            self._temp_image_path = str(image_path)
+            self._temp_image_until = time.time() + float(duration)
+        print(f"[ui] showing image for {duration:.1f}s: {image_path}")
     
     def start(self):
         """Start the UI render loop in a background thread."""
@@ -134,6 +146,17 @@ class UIManager:
             
             # Clear screen
             screen.fill(self.bg_color)
+
+            # Temporary captured-photo display takes priority over face states.
+            if self._render_temp_image_if_active(screen):
+                try:
+                    pygame.display.flip()
+                except pygame.error:
+                    break
+
+                self._frame_count += 1
+                clock.tick(self.fps)
+                continue
             
             # Get current state
             with self._state_lock:
@@ -170,6 +193,42 @@ class UIManager:
         pygame.display.quit()
         pygame.font.quit()
     
+    def _render_temp_image_if_active(self, screen) -> bool:
+        """Render a temporary image if one is active. Returns True if rendered."""
+        with self._temp_image_lock:
+            image_path = self._temp_image_path
+            active = image_path and time.time() < self._temp_image_until
+
+            if not active:
+                self._temp_image_path = None
+                self._temp_image_until = 0.0
+                return False
+
+        try:
+            image = pygame.image.load(image_path).convert()
+            img_w, img_h = image.get_size()
+
+            if img_w <= 0 or img_h <= 0:
+                return False
+
+            scale = min(self.width / img_w, self.height / img_h)
+            new_w = max(1, int(img_w * scale))
+            new_h = max(1, int(img_h * scale))
+
+            image = pygame.transform.smoothscale(image, (new_w, new_h))
+            rect = image.get_rect(center=(self.width // 2, self.height // 2))
+
+            screen.fill((0, 0, 0))
+            screen.blit(image, rect)
+            return True
+
+        except Exception as e:
+            print(f"[ui] image display error: {e}")
+            with self._temp_image_lock:
+                self._temp_image_path = None
+                self._temp_image_until = 0.0
+            return False
+
     def _load_faces(self):
         """Load PNG face assets, scale to fit display, and center."""
         target_height = int(self.height * 0.8)

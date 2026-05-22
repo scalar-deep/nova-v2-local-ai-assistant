@@ -15,7 +15,7 @@ class WhisperSTT:
     def __init__(
         self,
         whisper_path: str = "/usr/local/bin/whisper-cpp",
-        model_path: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/whisper.cpp/models/ggml-base.en-q5_0.bin",
+        model_path: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/models/ggml-base.en-q5_0.bin",
         language: str = "en",
         threads: int = 4
     ):
@@ -28,8 +28,8 @@ class WhisperSTT:
         if not Path(whisper_path).exists():
             # Try alternative paths
             alt_paths = [
-                "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/whisper.cpp/build/bin/whisper-cli",
-                "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/whisper.cpp/main",
+                "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/build/bin/whisper-cli",
+                "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/main",
             ]
             for alt in alt_paths:
                 if Path(alt).exists():

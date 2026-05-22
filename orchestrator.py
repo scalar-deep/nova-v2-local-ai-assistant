@@ -307,81 +307,81 @@ class Orchestrator:
         print("Wake word detected!")
         self._busy = True
 
-        # Clear conversation history — each wake word is a fresh interaction
-        self.router.clear_history()
-
-        # Pause wake word detection
-        self.wake_word.pause()
-
-        # Wake-cycle presence check disabled in Vision Safe Mode.
-
-        # Update UI
-        if self.ui:
-            self.ui.set_state(self.UIState.LISTENING)
-
-        # Record user speech
-        print("Listening...")
-        audio = self.audio.record_until_silence(
-            silence_duration=1.5,
-            max_duration=15.0
-        )
-
-        if audio is None or len(audio) == 0:
-            print("No speech detected")
-            if self.ui:
-                self.ui.set_state(self.UIState.IDLE)
-            self.wake_word.resume()
-            return
-
-        # Update UI
-        if self.ui:
-            self.ui.set_state(self.UIState.THINKING)
-
-        # Transcribe
-        print("Transcribing...")
         try:
-            text = self.stt.transcribe_audio_array(audio)
-            print(f"User said: {text}")
-            self.memory.set_last_user_message(text)
-            self.emotions.on_user_spoke()
-        except Exception as e:
-            print(f"Transcription error: {e}")
-            self._speak("Sorry, I didn't catch that.")
+            # Clear conversation history — each wake word is a fresh interaction
+            self.router.clear_history()
+
+            # Pause wake word detection while STT/TTS uses audio
+            try:
+                self.wake_word.pause()
+            except Exception as e:
+                print(f"Wake word pause error: {e}")
+
+            # Wake-cycle presence check disabled in Vision Safe Mode.
+
             if self.ui:
-                self.ui.set_state(self.UIState.IDLE)
-            self.wake_word.resume()
-            return
+                self.ui.set_state(self.UIState.LISTENING)
 
-        if not text.strip():
-            self._speak("I didn't hear anything.")
+            # Record user speech
+            print("Listening...")
+            audio = self.audio.record_until_silence(
+                silence_duration=1.5,
+                max_duration=15.0
+            )
+
+            if audio is None or len(audio) == 0:
+                print("No speech detected")
+                return
+
             if self.ui:
-                self.ui.set_state(self.UIState.IDLE)
-            self.wake_word.resume()
-            return
+                self.ui.set_state(self.UIState.THINKING)
 
-        # Speak a random filler phrase before processing
-        text_lower = text.lower()
-        if "on camera" not in text_lower:
-            self._speak_filler()
+            # Transcribe
+            print("Transcribing...")
+            try:
+                text = self.stt.transcribe_audio_array(audio)
+                print(f"User said: {text}")
+                self.memory.set_last_user_message(text)
+                self.emotions.on_user_spoke()
+            except Exception as e:
+                print(f"Transcription error: {e}")
+                self._speak("Sorry, I didn't catch that.")
+                return
 
-        # Route and respond
-        try:
-            self._process_query(text)
-        except Exception as e:
-            print(f"Processing error: {e}")
-            self.emotions.on_error()
-            self._speak("Sorry, something went wrong.")
+            if not text.strip():
+                print("Blank transcription")
+                self._speak("I didn't hear anything.")
+                return
+
+            # Speak a random filler phrase before processing
+            text_lower = text.lower()
+            if "on camera" not in text_lower:
+                self._speak_filler()
+
+            # Route and respond
+            try:
+                self._process_query(text)
+            except Exception as e:
+                print(f"Processing error: {e}")
+                self.emotions.on_error()
+                self._speak("Sorry, something went wrong.")
+                if self.ui:
+                    self.ui.set_state(self.UIState.ERROR)
+                time.sleep(1)
+
+        finally:
+            self._busy = False
+
             if self.ui:
-                self.ui.set_state(self.UIState.ERROR)
-            time.sleep(1)
+                try:
+                    self.ui.set_state(self.UIState.IDLE)
+                except Exception as e:
+                    print(f"UI idle error: {e}")
 
-        self._busy = False
-
-        # Return to idle
-        if self.ui:
-            self.ui.set_state(self.UIState.IDLE)
-
-        self.wake_word.resume()
+            try:
+                self.wake_word.resume()
+            except Exception as e:
+                print(f"Wake word resume error: {e}")
 
     def _speak_filler(self):
         """Play a random pre-generated filler phrase."""
@@ -496,6 +496,15 @@ class Orchestrator:
             try:
                 path = self.snapshot_camera.capture()
                 print(f"[vision] snapshot saved: {path}")
+
+                if self.ui and hasattr(self.ui, "show_image"):
+                    self.ui.show_image(path, duration=3.0)
+                    time.sleep(3.0)
+
+                    if self.ui:
+                        self.ui.set_state(self.UIState.IDLE)
+                else:
+                    print("[ui] show_image not available")
 
                 if "what do you see" in lowered:
                     response = self.vision_analyzer.analyze(path)

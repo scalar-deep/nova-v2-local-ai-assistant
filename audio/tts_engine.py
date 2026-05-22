@@ -23,7 +23,7 @@ class PiperTTS:
     
     def __init__(
         self,
-        model_path: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/piper/voices/en_GB-semaine-medium.onnx",
+        model_path: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/piper/voices/en_GB-semaine-medium.onnx",
         speaking_rate: float = 1.0,
         speaker_id: int = 0  # For multi-speaker models
     ):

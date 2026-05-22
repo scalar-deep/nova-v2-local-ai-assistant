@@ -14,25 +14,25 @@ class Config:
     """Application configuration."""
 
     # Paths (adjusted for actual installation location)
-    project_root: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release"
-    assets_path: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/assets/face"
+    project_root: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2"
+    assets_path: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/assets/face"
 
     # Audio - Piper TTS (using piper-tts Python package)
-    piper_voice: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/piper/voices/en_GB-semaine-medium.onnx"
+    piper_voice: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/piper/voices/en_GB-semaine-medium.onnx"
 
     # Whisper.cpp
     whisper_path: str = "/usr/local/bin/whisper-cpp"
-    whisper_model: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/whisper.cpp/models/ggml-base.en.bin"
+    whisper_model: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/whisper.cpp/models/ggml-base.en.bin"
 
     # Models
     chat_model: str = "qwen2.5:1.5b"
 
     # Wake word
-    wake_word_model: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/models/wake_word/hey_jarvis_v0.1.onnx"
+    wake_word_model: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2_Nova_V2/models/wake_word/hey_jarvis_v0.1.onnx"
     wake_word_threshold: float = 0.30
 
     # Microphone settings (for USB mics that may have different sample rates)
-    mic_sample_rate: int = 48000
+    mic_sample_rate: int = 16000
 
     # Local location default
     local_location: str = "Kingston, CA"
@@ -44,8 +44,8 @@ class Config:
     newsapi_key: str = ""
 
     # Soul/personality files
-    local_soul_path: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/config/local_soul.md"
-    cloud_soul_path: str = "/home/pi/projects/test_bot/Nova_OpenWakeModel_release/config/cloud_soul.md"
+    local_soul_path: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/config/local_soul.md"
+    cloud_soul_path: str = "/home/pi/projects/test_bot/pibot_local_agent_Nova_V2/config/cloud_soul.md"
 
     # Display
     display_width: int = 800

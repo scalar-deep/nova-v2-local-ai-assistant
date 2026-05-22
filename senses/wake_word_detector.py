@@ -2,6 +2,7 @@
 Wake word detection using openWakeWord.
 """
 
+import time
 import numpy as np
 import sounddevice as sd
 from queue import Queue, Empty
@@ -68,30 +69,26 @@ class WakeWordDetector:
         self.mic_sample_rate = mic_sample_rate
         self.gain_target_peak = gain_target_peak
 
-        # openWakeWord expects 16kHz audio chunks of 1280 samples.
-        # If the mic records at 48kHz, we collect 3840 samples and downsample by 3.
-        # If the mic records at 16kHz, we collect 1280 samples and use them directly.
         if self.mic_sample_rate == 16000:
             self.mic_chunk_size = 1280
         elif self.mic_sample_rate == 48000:
             self.mic_chunk_size = 3840
         else:
-            # Fallback: roughly 80ms of audio
             self.mic_chunk_size = int(self.mic_sample_rate * 0.08)
 
-        # Resolve mic device by name
         self.mic_device = _find_mic_device()
         print("    Wake word mic: device {} ({})".format(self.mic_device, MIC_NAME))
         print("    Wake word mic sample rate: {}".format(self.mic_sample_rate))
         print("    Wake word threshold: {}".format(self.threshold))
 
-        # Use custom model if provided, otherwise fall back to built-in hey_jarvis
         use_custom = model_path and Path(model_path).exists()
 
         if use_custom:
+            print("    Wake word model: custom {}".format(model_path))
             self.model = Model(wakeword_model_paths=[model_path])
         else:
             jarvis_path = _find_bundled_model("hey_jarvis")
+            print("    Wake word model: bundled {}".format(jarvis_path))
             self.model = Model(wakeword_model_paths=[jarvis_path])
 
         self._running = False
@@ -102,9 +99,15 @@ class WakeWordDetector:
         self._paused = False
         self._audio_queue: Queue = Queue()
         self._gain = 4.0
+        self._last_score_log = 0.0
+        self._last_chunk_log = 0.0
 
     def start(self, callback: Callable[[], None]):
         """Start listening for wake word."""
+        if self._running:
+            print("[wake] start ignored; already running")
+            return
+
         self._callback = callback
         self._running = True
         self._paused = False
@@ -113,32 +116,50 @@ class WakeWordDetector:
 
         self._thread = Thread(target=self._listen_loop, daemon=True)
         self._thread.start()
+        print("[wake] detector thread started")
 
     def stop(self):
         """Stop listening."""
+        print("[wake] stop requested")
         self._running = False
+        self._paused = False
         self._stop_event.set()
         self._resume_event.set()
 
         if self._thread:
             self._thread.join(timeout=2.0)
+            print("[wake] detector thread stopped")
 
     def pause(self):
         """Pause detection and release the mic stream."""
+        print("[wake] pause requested")
         self._paused = True
         self._resume_event.clear()
 
     def resume(self):
         """Resume detection and reopen mic stream."""
+        print("[wake] resume requested")
         self._paused = False
 
+        cleared = 0
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()
+                cleared += 1
             except Empty:
                 break
 
+        if cleared:
+            print("[wake] cleared queued chunks: {}".format(cleared))
+
+        try:
+            self.model.reset()
+            print("[wake] model reset")
+        except Exception as e:
+            print("[wake] model reset error: {}".format(e))
+
         self._resume_event.set()
+        print("[wake] resume event set")
 
     def _normalize(self, audio: np.ndarray) -> np.ndarray:
         """Apply adaptive gain normalization for weak USB mics."""
@@ -152,8 +173,6 @@ class WakeWordDetector:
 
         target = self.gain_target_peak * 32767
         desired_gain = target / peak
-
-        # Cap gain to avoid clipping distortion on speech/noise
         desired_gain = min(desired_gain, 8.0)
 
         self._gain = 0.3 * desired_gain + 0.7 * self._gain
@@ -182,13 +201,15 @@ class WakeWordDetector:
             return np.clip(resampled, -32768, 32767).astype(np.int16)
 
         except Exception as e:
-            print("Wake word resample failed:", e)
+            print("[wake] resample failed:", e)
             return audio.astype(np.int16)
 
     def _listen_loop(self):
         """Main listening loop. Reopens stream after each pause/resume cycle."""
         while self._running:
+            print("[wake] waiting for resume event")
             self._resume_event.wait()
+            print("[wake] resume event received")
 
             if not self._running:
                 break
@@ -200,9 +221,11 @@ class WakeWordDetector:
                     break
 
             def audio_callback(indata, frames, time_info, status):
-                if status:
-                    pass
+                # Do not print every overflow from inside the audio callback.
+                # Printing here can make overflows worse on Raspberry Pi.
                 self._audio_queue.put(bytes(indata))
+
+            stream = None
 
             try:
                 stream = sd.RawInputStream(
@@ -215,47 +238,96 @@ class WakeWordDetector:
                     callback=audio_callback
                 )
                 stream.start()
+                print("[wake] mic stream started")
 
             except Exception as e:
-                print("Wake word stream error: {}".format(e))
+                print("[wake] stream error: {}".format(e))
+                if stream:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
                 if self._running:
                     self._stop_event.wait(timeout=1.0)
                 continue
 
             detected = False
 
-            while self._running and not self._paused:
-                try:
-                    raw = self._audio_queue.get(timeout=0.1)
-                except Empty:
-                    continue
+            try:
+                while self._running and not self._paused:
+                    try:
+                        raw = self._audio_queue.get(timeout=0.1)
+                    except Empty:
+                        now = time.time()
+                        if now - self._last_chunk_log > 5:
+                            print("[wake] alive but no audio chunks; paused={} queue={}".format(
+                                self._paused,
+                                self._audio_queue.qsize()
+                            ))
+                            self._last_chunk_log = now
+                        continue
 
-                audio = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
-                normalized = self._normalize(audio)
-                audio_16k = self._to_16k(normalized)
+                    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
+                    normalized = self._normalize(audio)
+                    audio_16k = self._to_16k(normalized)
 
-                predictions = self.model.predict(audio_16k)
+                    try:
+                        predictions = self.model.predict(audio_16k)
+                    except Exception as e:
+                        print("[wake] prediction error: {}".format(e))
+                        try:
+                            self.model.reset()
+                        except Exception:
+                            pass
+                        continue
 
-                for model_name, score in predictions.items():
-                    if score >= self.threshold:
-                        print(
-                            "Wake word detected! ({}, score: {:.3f})".format(
-                                model_name,
-                                score
+                    now = time.time()
+                    if now - self._last_score_log > 5:
+                        best = max(predictions.values()) if predictions else 0.0
+                        peak = int(np.max(np.abs(audio))) if audio.size else 0
+                        print("[wake] alive paused={} queue={} peak={} best_score={:.3f}".format(
+                            self._paused,
+                            self._audio_queue.qsize(),
+                            peak,
+                            best
+                        ))
+                        self._last_score_log = now
+
+                    for model_name, score in predictions.items():
+                        if score >= self.threshold:
+                            print(
+                                "Wake word detected! ({}, score: {:.3f})".format(
+                                    model_name,
+                                    score
+                                )
                             )
-                        )
-                        detected = True
+                            detected = True
+                            break
+
+                    if detected:
                         break
 
-                if detected:
-                    break
-
-            # Close stream before callback to free USB mic for STT recording
-            stream.stop()
-            stream.close()
+            finally:
+                try:
+                    stream.stop()
+                    stream.close()
+                    print("[wake] mic stream closed")
+                except Exception as e:
+                    print("[wake] stream close error: {}".format(e))
 
             if detected and self._callback:
                 self._paused = True
                 self._resume_event.clear()
-                self.model.reset()
-                self._callback()
+
+                try:
+                    self.model.reset()
+                except Exception as e:
+                    print("[wake] model reset before callback error: {}".format(e))
+
+                try:
+                    self._callback()
+                except Exception as e:
+                    print("[wake] callback error: {}".format(e))
+                    self.resume()
+
+        print("[wake] listen loop exited")
