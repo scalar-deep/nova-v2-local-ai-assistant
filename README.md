@@ -92,8 +92,8 @@ A fully offline, wake-word-activated voice assistant that runs on a **Raspberry 
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/mayukh4/pibot_local_agent.git
-cd pibot_local_agent
+git clone https://github.com/scalar-deep/nova-v2-local-ai-assistant.git
+cd nova-v2-local-ai-assistant
 ```
 
 ### 2. Run the install script
