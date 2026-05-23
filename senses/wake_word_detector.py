@@ -1,11 +1,18 @@
 """
 Wake word detection using openWakeWord.
+
+Permanent reliability version:
+- Opens the USB mic stream for wake-word listening.
+- Automatically restarts the mic stream if audio chunks stop arriving.
+- Periodically refreshes the stream even if it looks healthy.
+- Drops old queued audio instead of letting the queue grow.
+- Resets the wake-word model after detections and resumes.
 """
 
 import time
 import numpy as np
 import sounddevice as sd
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 from typing import Callable, Optional
 from threading import Thread, Event
 from pathlib import Path
@@ -50,7 +57,7 @@ def _find_bundled_model(name: str) -> str:
 
 
 class WakeWordDetector:
-    """Detects wake word using openWakeWord."""
+    """Detects wake word using openWakeWord with self-healing audio stream."""
 
     def __init__(
         self,
@@ -59,7 +66,9 @@ class WakeWordDetector:
         sample_rate: int = 16000,
         mic_sample_rate: int = 48000,
         inference_framework: str = "onnx",
-        gain_target_peak: float = 0.9
+        gain_target_peak: float = 0.9,
+        no_audio_restart_seconds: float = 8.0,
+        stream_refresh_seconds: float = 180.0,
     ):
         if not OPENWAKEWORD_AVAILABLE:
             raise RuntimeError("openwakeword not installed. Run: pip install openwakeword")
@@ -68,7 +77,11 @@ class WakeWordDetector:
         self.sample_rate = sample_rate
         self.mic_sample_rate = mic_sample_rate
         self.gain_target_peak = gain_target_peak
+        self.no_audio_restart_seconds = no_audio_restart_seconds
+        self.stream_refresh_seconds = stream_refresh_seconds
 
+        # openWakeWord expects 16 kHz chunks of 1280 samples.
+        # At 48 kHz, collect 3840 samples and decimate to 16 kHz.
         if self.mic_sample_rate == 16000:
             self.mic_chunk_size = 1280
         elif self.mic_sample_rate == 48000:
@@ -80,6 +93,8 @@ class WakeWordDetector:
         print("    Wake word mic: device {} ({})".format(self.mic_device, MIC_NAME))
         print("    Wake word mic sample rate: {}".format(self.mic_sample_rate))
         print("    Wake word threshold: {}".format(self.threshold))
+        print("    Wake watchdog: restart if no audio for {:.1f}s".format(self.no_audio_restart_seconds))
+        print("    Wake watchdog: refresh stream every {:.1f}s".format(self.stream_refresh_seconds))
 
         use_custom = model_path and Path(model_path).exists()
 
@@ -97,10 +112,13 @@ class WakeWordDetector:
         self._thread: Optional[Thread] = None
         self._callback: Optional[Callable] = None
         self._paused = False
-        self._audio_queue: Queue = Queue()
+
+        # Small bounded queue prevents stale audio buildup.
+        self._audio_queue: Queue = Queue(maxsize=30)
+
         self._gain = 4.0
-        self._last_score_log = 0.0
-        self._last_chunk_log = 0.0
+        self._stream_restart_count = 0
+        self._ignore_until = 0.0
 
     def start(self, callback: Callable[[], None]):
         """Start listening for wake word."""
@@ -140,9 +158,23 @@ class WakeWordDetector:
         """Resume detection and reopen mic stream."""
         print("[wake] resume requested")
         self._paused = False
+        self._drain_queue()
 
+        try:
+            self.model.reset()
+            print("[wake] model reset")
+        except Exception as e:
+            print("[wake] model reset error: {}".format(e))
+
+        self._ignore_until = time.time() + 2.0
+        print("[wake] ignoring wake detections for 2.0s after resume")
+
+        self._resume_event.set()
+        print("[wake] resume event set")
+
+    def _drain_queue(self):
         cleared = 0
-        while not self._audio_queue.empty():
+        while True:
             try:
                 self._audio_queue.get_nowait()
                 cleared += 1
@@ -151,15 +183,6 @@ class WakeWordDetector:
 
         if cleared:
             print("[wake] cleared queued chunks: {}".format(cleared))
-
-        try:
-            self.model.reset()
-            print("[wake] model reset")
-        except Exception as e:
-            print("[wake] model reset error: {}".format(e))
-
-        self._resume_event.set()
-        print("[wake] resume event set")
 
     def _normalize(self, audio: np.ndarray) -> np.ndarray:
         """Apply adaptive gain normalization for weak USB mics."""
@@ -182,7 +205,7 @@ class WakeWordDetector:
         return gained.astype(np.int16)
 
     def _to_16k(self, audio: np.ndarray) -> np.ndarray:
-        """Convert mic audio chunk to 16kHz for openWakeWord."""
+        """Convert mic audio chunk to 16 kHz for openWakeWord."""
         if self.mic_sample_rate == 16000:
             return audio.astype(np.int16)
 
@@ -204,8 +227,53 @@ class WakeWordDetector:
             print("[wake] resample failed:", e)
             return audio.astype(np.int16)
 
+    def _open_stream(self):
+        def audio_callback(indata, frames, time_info, status):
+            # Do not print inside this callback.
+            # Printing here can cause more overflows on Raspberry Pi.
+            try:
+                self._audio_queue.put_nowait(bytes(indata))
+            except Full:
+                # Drop the oldest chunk and keep the newest one.
+                try:
+                    self._audio_queue.get_nowait()
+                except Empty:
+                    pass
+
+                try:
+                    self._audio_queue.put_nowait(bytes(indata))
+                except Full:
+                    pass
+
+        stream = sd.RawInputStream(
+            device=self.mic_device,
+            samplerate=self.mic_sample_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=self.mic_chunk_size,
+            latency="high",
+            callback=audio_callback
+        )
+
+        stream.start()
+        return stream
+
+    def _close_stream(self, stream):
+        if not stream:
+            return
+
+        try:
+            stream.stop()
+        except Exception as e:
+            print("[wake] stream stop error: {}".format(e))
+
+        try:
+            stream.close()
+        except Exception as e:
+            print("[wake] stream close error: {}".format(e))
+
     def _listen_loop(self):
-        """Main listening loop. Reopens stream after each pause/resume cycle."""
+        """Main listening loop. Self-heals by reopening the audio stream."""
         while self._running:
             print("[wake] waiting for resume event")
             self._resume_event.wait()
@@ -214,60 +282,51 @@ class WakeWordDetector:
             if not self._running:
                 break
 
-            while not self._audio_queue.empty():
-                try:
-                    self._audio_queue.get_nowait()
-                except Empty:
-                    break
+            self._drain_queue()
 
-            def audio_callback(indata, frames, time_info, status):
-                # Do not print every overflow from inside the audio callback.
-                # Printing here can make overflows worse on Raspberry Pi.
-                self._audio_queue.put(bytes(indata))
+            try:
+                self.model.reset()
+            except Exception:
+                pass
 
             stream = None
-
-            try:
-                stream = sd.RawInputStream(
-                    device=self.mic_device,
-                    samplerate=self.mic_sample_rate,
-                    channels=1,
-                    dtype="int16",
-                    blocksize=self.mic_chunk_size,
-                    latency="high",
-                    callback=audio_callback
-                )
-                stream.start()
-                print("[wake] mic stream started")
-
-            except Exception as e:
-                print("[wake] stream error: {}".format(e))
-                if stream:
-                    try:
-                        stream.close()
-                    except Exception:
-                        pass
-                if self._running:
-                    self._stop_event.wait(timeout=1.0)
-                continue
-
             detected = False
+            restart_reason = ""
 
             try:
+                stream = self._open_stream()
+                stream_opened_at = time.time()
+                last_audio_at = time.time()
+                self._stream_restart_count += 1
+
+                print("[wake] mic stream started/restarted count={}".format(
+                    self._stream_restart_count
+                ))
+
                 while self._running and not self._paused:
+                    now = time.time()
+
+                    # Periodic refresh prevents long-running ALSA/sounddevice stalls.
+                    if now - stream_opened_at >= self.stream_refresh_seconds:
+                        restart_reason = "scheduled stream refresh"
+                        break
+
                     try:
-                        raw = self._audio_queue.get(timeout=0.1)
+                        raw = self._audio_queue.get(timeout=0.25)
+                        last_audio_at = time.time()
                     except Empty:
-                        now = time.time()
-                        if now - self._last_chunk_log > 5:
-                            print("[wake] alive but no audio chunks; paused={} queue={}".format(
-                                self._paused,
-                                self._audio_queue.qsize()
-                            ))
-                            self._last_chunk_log = now
+                        if time.time() - last_audio_at >= self.no_audio_restart_seconds:
+                            restart_reason = "no audio chunks for {:.1f}s".format(
+                                self.no_audio_restart_seconds
+                            )
+                            break
                         continue
 
                     audio = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
+
+                    if audio.size == 0:
+                        continue
+
                     normalized = self._normalize(audio)
                     audio_16k = self._to_16k(normalized)
 
@@ -281,17 +340,8 @@ class WakeWordDetector:
                             pass
                         continue
 
-                    now = time.time()
-                    if now - self._last_score_log > 5:
-                        best = max(predictions.values()) if predictions else 0.0
-                        peak = int(np.max(np.abs(audio))) if audio.size else 0
-                        print("[wake] alive paused={} queue={} peak={} best_score={:.3f}".format(
-                            self._paused,
-                            self._audio_queue.qsize(),
-                            peak,
-                            best
-                        ))
-                        self._last_score_log = now
+                    if time.time() < self._ignore_until:
+                        continue
 
                     for model_name, score in predictions.items():
                         if score >= self.threshold:
@@ -307,13 +357,13 @@ class WakeWordDetector:
                     if detected:
                         break
 
+            except Exception as e:
+                restart_reason = "stream exception: {}".format(e)
+                print("[wake] {}".format(restart_reason))
+
             finally:
-                try:
-                    stream.stop()
-                    stream.close()
-                    print("[wake] mic stream closed")
-                except Exception as e:
-                    print("[wake] stream close error: {}".format(e))
+                self._close_stream(stream)
+                print("[wake] mic stream closed")
 
             if detected and self._callback:
                 self._paused = True
@@ -329,5 +379,11 @@ class WakeWordDetector:
                 except Exception as e:
                     print("[wake] callback error: {}".format(e))
                     self.resume()
+
+            elif self._running and not self._paused:
+                if restart_reason:
+                    print("[wake] restarting mic stream: {}".format(restart_reason))
+                time.sleep(0.2)
+                continue
 
         print("[wake] listen loop exited")
